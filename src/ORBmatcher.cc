@@ -38,6 +38,7 @@ const int ORBmatcher::TH_HIGH = 100;
 const int ORBmatcher::TH_LOW = 50;
 const int ORBmatcher::HISTO_LENGTH = 30;
 
+//构造函数什么也没干
 ORBmatcher::ORBmatcher(float nnratio, bool checkOri): mfNNratio(nnratio), mbCheckOrientation(checkOri)
 {
 }
@@ -520,7 +521,8 @@ int ORBmatcher::SearchForInitialization(Frame &F1, Frame &F2, vector<cv::Point2f
 }
 
 int ORBmatcher::SearchByBoW(KeyFrame *pKF1, KeyFrame *pKF2, vector<MapPoint *> &vpMatches12)
-{
+{   
+
     const vector<cv::KeyPoint> &vKeysUn1 = pKF1->mvKeysUn;
     const DBoW2::FeatureVector &vFeatVec1 = pKF1->mFeatVec;
     const vector<MapPoint*> vpMapPoints1 = pKF1->GetMapPointMatches();
@@ -1324,7 +1326,8 @@ int ORBmatcher::SearchBySim3(KeyFrame *pKF1, KeyFrame *pKF2, vector<MapPoint*> &
 
     return nFound;
 }
-
+//在两个frame之间,根据投影来在进行范围匹配  只能通过匀速模型匹配
+//     matcher.SearchByProjection(mCurrentFrame,mLastFrame,th/*15*/,mSensor==System::MONOCULAR);
 int ORBmatcher::SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame, const float th, const bool bMono)
 {
     int nmatches = 0;
@@ -1335,25 +1338,27 @@ int ORBmatcher::SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame, 
         rotHist[i].reserve(500);
     const float factor = 1.0f/HISTO_LENGTH;
 
+    //current frame  camera to world
     const cv::Mat Rcw = CurrentFrame.mTcw.rowRange(0,3).colRange(0,3);
     const cv::Mat tcw = CurrentFrame.mTcw.rowRange(0,3).col(3);
 
     const cv::Mat twc = -Rcw.t()*tcw;
-
+    //last frame camera to world
     const cv::Mat Rlw = LastFrame.mTcw.rowRange(0,3).colRange(0,3);
     const cv::Mat tlw = LastFrame.mTcw.rowRange(0,3).col(3);
 
     const cv::Mat tlc = Rlw*twc+tlw;
-
+// mb Stereo baseline in meters.
     const bool bForward = tlc.at<float>(2)>CurrentFrame.mb && !bMono;
     const bool bBackward = -tlc.at<float>(2)>CurrentFrame.mb && !bMono;
 
+    //对上一帧的每个特征点做循环 开始
     for(int i=0; i<LastFrame.N; i++)
     {
         MapPoint* pMP = LastFrame.mvpMapPoints[i];
-
+        //如果该特征点确实存在
         if(pMP)
-        {
+        {   //并且不是outlier
             if(!LastFrame.mvbOutlier[i])
             {
                 // Project
@@ -1370,6 +1375,7 @@ int ORBmatcher::SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame, 
                 float u = CurrentFrame.fx*xc*invzc+CurrentFrame.cx;
                 float v = CurrentFrame.fy*yc*invzc+CurrentFrame.cy;
 
+                //判断像素点是否超出当前帧图片的边界
                 if(u<CurrentFrame.mnMinX || u>CurrentFrame.mnMaxX)
                     continue;
                 if(v<CurrentFrame.mnMinY || v>CurrentFrame.mnMaxY)
@@ -1397,9 +1403,12 @@ int ORBmatcher::SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame, 
                 int bestDist = 256;
                 int bestIdx2 = -1;
 
+                //小范围暴力匹配 主要代码
                 for(vector<size_t>::const_iterator vit=vIndices2.begin(), vend=vIndices2.end(); vit!=vend; vit++)
                 {
                     const size_t i2 = *vit;
+                    //判断当前帧的该特征点是否已经被观测到
+                    //如果被观测数大于0,则跳过这个点
                     if(CurrentFrame.mvpMapPoints[i2])
                         if(CurrentFrame.mvpMapPoints[i2]->Observations()>0)
                             continue;
@@ -1428,6 +1437,8 @@ int ORBmatcher::SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame, 
                     CurrentFrame.mvpMapPoints[bestIdx2]=pMP;
                     nmatches++;
 
+                    //构建旋转直方图
+                    //通过统计出来的特征点旋转的角度, 来把那些旋转异常的特征点剔除出去
                     if(mbCheckOrientation)
                     {
                         float rot = LastFrame.mvKeysUn[i].angle-CurrentFrame.mvKeysUn[bestIdx2].angle;
@@ -1443,7 +1454,12 @@ int ORBmatcher::SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame, 
             }
         }
     }
+    //对上一帧每个特征点做循环 结束
+    //过程比较简单,先按照当前帧的相机外参把上一帧的特征点转换到当前帧的坐标系中, 然后再把转换后的点周围的全部特征点弄出来和它匹配. 
+    //最后匹配成功的就是特征点对
+    //当前帧的相机位姿应该就是匀速模型
 
+    //根据旋转方向判断匹配的一致性 我的实现可以省略
     //Apply rotation consistency
     if(mbCheckOrientation)
     {
@@ -1644,8 +1660,18 @@ void ORBmatcher::ComputeThreeMaxima(vector<int>* histo, const int L, int &ind1, 
 
 // Bit set count operation from
 // http://graphics.stanford.edu/~seander/bithacks.html#CountBitsSetParallel
+//每个描述子是由32个uchar型构成. 所以8行,
+
+/*
+The best method for counting bits in a 32-bit integer v is the following:
+
+v = v - ((v >> 1) & 0x55555555);                    // reuse input as temporary
+v = (v & 0x33333333) + ((v >> 2) & 0x33333333);     // temp
+c = ((v + (v >> 4) & 0xF0F0F0F) * 0x1010101) >> 24; // count
+*/
 int ORBmatcher::DescriptorDistance(const cv::Mat &a, const cv::Mat &b)
 {
+    //a 和 b 就是行向量,强制将a和b的每位变成32bit
     const int *pa = a.ptr<int32_t>();
     const int *pb = b.ptr<int32_t>();
 
@@ -1654,7 +1680,9 @@ int ORBmatcher::DescriptorDistance(const cv::Mat &a, const cv::Mat &b)
     for(int i=0; i<8; i++, pa++, pb++)
     {
         unsigned  int v = *pa ^ *pb;
+        //0x55555555 = 01010101 01010101 01010101 01010101
         v = v - ((v >> 1) & 0x55555555);
+        //0x33333333 = 00110011 00110011 00110011 00110011
         v = (v & 0x33333333) + ((v >> 2) & 0x33333333);
         dist += (((v + (v >> 4)) & 0xF0F0F0F) * 0x1010101) >> 24;
     }

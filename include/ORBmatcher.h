@@ -40,21 +40,28 @@ public:
 
     ORBmatcher(float nnratio=0.6, bool checkOri=true);
 
+    // 计算两个描述子之间的距离，采用二进制位操作，速度很快。
     // Computes the Hamming distance between two ORB descriptors
     static int DescriptorDistance(const cv::Mat &a, const cv::Mat &b);
 
+    // 搜索frame里的keypoints与投影后的地图点的匹配，返回是匹配的数量
     // Search matches between Frame keypoints and projected MapPoints. Returns number of matches
     // Used to track the local map (Tracking)
     int SearchByProjection(Frame &F, const std::vector<MapPoint*> &vpMapPoints, const float th=3);
 
+    // 把上一帧跟踪到的地图点投影到当前帧，并且寻找匹配。 匀速模型时用的匹配方法
     // Project MapPoints tracked in last frame into the current frame and search matches.
     // Used to track from previous frame (Tracking)
     int SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame, const float th, const bool bMono);
 
+    //tracking时用到的。 把关键帧中的地图点投影到当前帧中，并且寻找匹配
     // Project MapPoints seen in KeyFrame into the Frame and search matches.
     // Used in relocalisation (Tracking)
+    //匀速模型失效时, 用的一般匹配方法.
     int SearchByProjection(Frame &CurrentFrame, KeyFrame* pKF, const std::set<MapPoint*> &sAlreadyFound, const float th, const int ORBdist);
 
+
+    //回环检测时用到的投影匹配
     // Project MapPoints using a Similarity Transformation and search matches.
     // Used in loop detection (Loop Closing)
      int SearchByProjection(KeyFrame* pKF, cv::Mat Scw, const std::vector<MapPoint*> &vpPoints, std::vector<MapPoint*> &vpMatched, int th);
